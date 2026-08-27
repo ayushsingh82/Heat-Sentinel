@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Building Heat-Risk Copilot",
-  description: "Predicts hourly cooling-load risk and recommends a pre-cooling schedule from hyperlocal temperature data.",
+  title: "Heat Sentinel",
+  description:
+    "An autonomous agent that watches a city's assets with hyperlocal temperature intelligence and acts before the heat peak hits.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
