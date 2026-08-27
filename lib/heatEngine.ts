@@ -1,10 +1,9 @@
-import type { HourlyTemp } from "./fortyguard";
+import type { BuildingProfile } from "./aoi";
 
-export type BuildingProfile = {
-  baselineKw: number;
-  hvacCapacityKw: number;
-  coolingSetpointF: number;
-};
+/** Minimal hourly temperature input the engine needs. */
+export type HourlyTemp = { hour: number; tempF: number };
+
+export type { BuildingProfile };
 
 export type HourlyLoad = {
   hour: number;
@@ -33,13 +32,13 @@ export type HeatRiskResult = {
  * increase that's a meaningful (but not absurd) fraction of a typical
  * commercial building's baseline draw.
  */
-const KW_PER_DEGREE_OVER_SETPOINT = 0.8;
+const KW_PER_DEGREE_OVER_SETPOINT = 1.1;
 
 /** How many hours before the predicted peak pre-cooling should start. */
 const PRE_COOL_LEAD_HOURS = 3;
 
 /** Fraction of the peak's excess-over-baseline that pre-cooling is assumed to shave. */
-const PRE_COOL_SHAVE_FRACTION = 0.35;
+const PRE_COOL_SHAVE_FRACTION = 0.45;
 
 function predictedLoadKw(tempF: number, profile: BuildingProfile): number {
   const excessDegrees = Math.max(0, tempF - profile.coolingSetpointF);
