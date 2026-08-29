@@ -187,8 +187,8 @@ function todayIso(): string {
 }
 
 async function pollStatus(root: string, apiKey: string, activityId: string): Promise<unknown | null> {
-  for (let attempt = 0; attempt < 40; attempt++) {
-    await new Promise((r) => setTimeout(r, 3000));
+  for (let attempt = 0; attempt < 22; attempt++) {
+    await new Promise((r) => setTimeout(r, 2200));
     const res = await fetch(`${root}/v1/status/${activityId}`, { headers: { "api-key": apiKey } });
     if (!res.ok) continue;
     const json = await res.json();
@@ -254,21 +254,26 @@ function normalizeEnvParams(result: unknown): HourlySignal[] | null {
   const n = Math.min(24, stamps.length);
   const out: HourlySignal[] = [];
   for (let i = 0; i < n; i++) {
-    const hour = new Date(stamps[i]).getHours();
-    const heatIndexC = cval(params["heat_index_celsius"], i, 35);
-    const apparentC = cval(params["apparent_temperature_celsius"], i, heatIndexC);
+    // Timestamps carry a +04:00 offset; take the local hour from the string.
+    const hourMatch = stamps[i].match(/T(\d{2}):/);
+    const hour = hourMatch ? Number(hourMatch[1]) : i % 24;
+
+    const apparentC = cval(params["apparent_temperature_celsius"], i, 40);
     const wbC = cval(params["wet_bulb_temperature_celsius"], i, 26);
     const rh = cval(params["relative_humidity_percent"], i, 50);
     const aqi = cval(params["air_quality:idx"], i, 80);
 
-    // env_params returns comfort indices, not a raw air-temp array — approximate
-    // air temp as sitting just below the mean of heat index and apparent temp.
-    const airC = (heatIndexC + apparentC) / 2 - 1.5;
+    // env_params has no raw air-temp array, and its heat_index_celsius field runs
+    // away under hot+humid conditions — so derive dry-bulb from apparent
+    // temperature (apparent ≈ air + a few °C of sun/humidity load by day, ≈ air
+    // at night) and recompute the heat index ourselves with the NWS cap.
+    const solarLoad = hour >= 8 && hour <= 17 ? 3.5 : 1;
+    const airF = cToF(apparentC) - solarLoad;
 
     out.push({
       hour,
-      tempF: Math.round(cToF(airC) * 10) / 10,
-      heatIndexF: Math.round(cToF(heatIndexC) * 10) / 10,
+      tempF: Math.round(airF * 10) / 10,
+      heatIndexF: Math.round(heatIndexF(airF, rh) * 10) / 10,
       apparentF: Math.round(cToF(apparentC) * 10) / 10,
       wetBulbF: Math.round(cToF(wbC) * 10) / 10,
       relativeHumidityPct: Math.round(rh),
