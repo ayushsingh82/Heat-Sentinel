@@ -22,19 +22,26 @@ export default function Console() {
   const [data, setData] = useState<AssessResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cityId, setCityId] = useState("abu-dhabi");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<Record<string, ApprovalState>>({});
   const [openDraft, setOpenDraft] = useState<string | null>(null);
 
-  const runAssessment = useCallback(async () => {
+  const runAssessment = useCallback(async (targetCity: string, keepSelection: boolean) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/assess", { method: "POST" });
+      const res = await fetch("/api/assess", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cityId: targetCity }),
+      });
       const json = (await res.json()) as AssessResponse;
       if (!res.ok) throw new Error("assessment failed");
       setData(json);
-      setSelectedId((cur) => cur ?? json.assessments[0]?.aoiId ?? null);
+      setSelectedId((cur) =>
+        keepSelection && cur ? cur : json.assessments[0]?.aoiId ?? null,
+      );
       setApprovals(
         Object.fromEntries(json.assessments.map((a) => [a.aoiId, "pending" as ApprovalState])),
       );
@@ -46,8 +53,15 @@ export default function Console() {
   }, []);
 
   useEffect(() => {
-    runAssessment();
-  }, [runAssessment]);
+    runAssessment(cityId, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function changeCity(next: string) {
+    setCityId(next);
+    setSelectedId(null);
+    runAssessment(next, false);
+  }
 
   const selected = useMemo(
     () => data?.assessments.find((a) => a.aoiId === selectedId) ?? null,
@@ -63,7 +77,9 @@ export default function Console() {
           data={data}
           loading={loading}
           pendingCount={pendingCount}
-          onRun={runAssessment}
+          cityId={cityId}
+          onCityChange={changeCity}
+          onRun={() => runAssessment(cityId, true)}
         />
 
         {error && (
@@ -127,13 +143,18 @@ function Header({
   data,
   loading,
   pendingCount,
+  cityId,
+  onCityChange,
   onRun,
 }: {
   data: AssessResponse | null;
   loading: boolean;
   pendingCount: number;
+  cityId: string;
+  onCityChange: (id: string) => void;
   onRun: () => void;
 }) {
+  const cities = data?.cities ?? [];
   return (
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-3">
@@ -143,12 +164,25 @@ function Header({
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Heat Sentinel</h1>
           <p className="text-xs text-zinc-500">
-            Autonomous heat-response console · Abu Dhabi portfolio
+            Autonomous heat-response console
+            {data?.city ? ` · ${data.city.name}, ${data.city.country}` : ""}
           </p>
         </div>
       </div>
 
       <div className="flex items-center gap-2">
+        <select
+          value={cityId}
+          onChange={(e) => onCityChange(e.target.value)}
+          disabled={loading || cities.length === 0}
+          className="rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none focus:border-zinc-500 disabled:opacity-50"
+        >
+          {(cities.length ? cities : [{ id: cityId, name: "Abu Dhabi" }]).map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
         <Badge
           tone={data?.dataSource === "live" ? "live" : "mock"}
           label={
@@ -358,6 +392,8 @@ function DetailPanel({
           <Legend swatch="rgba(239,68,68,0.4)" label="Peak window" />
           <Legend swatch="rgba(45,212,191,0.5)" label="Action window" />
         </div>
+
+        <SignalReadout assessment={assessment} />
       </div>
 
       <div className="flex flex-col gap-3">
@@ -395,5 +431,31 @@ function Legend({ swatch, label }: { swatch: string; label: string }) {
       <span className="inline-block h-2 w-2 rounded-full" style={{ background: swatch }} />
       {label}
     </span>
+  );
+}
+
+function SignalReadout({ assessment }: { assessment: Assessment }) {
+  const h = assessment.hourly;
+  const max = (sel: (x: Assessment["hourly"][number]) => number) => Math.max(...h.map(sel));
+  const min = (sel: (x: Assessment["hourly"][number]) => number) => Math.min(...h.map(sel));
+  const stats: { label: string; value: string }[] = [
+    { label: "Peak heat index", value: `${max((x) => x.heatIndexF).toFixed(0)}°F` },
+    { label: "Peak wet-bulb", value: `${max((x) => x.wetBulbF).toFixed(1)}°F` },
+    { label: "Overnight low", value: `${min((x) => x.tempF).toFixed(0)}°F` },
+    { label: "Min humidity", value: `${min((x) => x.relativeHumidityPct)}%` },
+    { label: "Peak PM2.5", value: `${max((x) => x.pm25)}` },
+    { label: "Peak solar GHI", value: `${max((x) => x.solarGhi)} W/m²` },
+    { label: "Peak CO₂", value: `${max((x) => x.co2Ppm)} ppm` },
+    { label: "Max cloud", value: `${max((x) => x.cloudCoverOctas)}/8` },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+      {stats.map((s) => (
+        <div key={s.label} className="rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5">
+          <p className="text-[10px] uppercase tracking-wide text-zinc-500">{s.label}</p>
+          <p className="text-sm font-medium text-zinc-200">{s.value}</p>
+        </div>
+      ))}
+    </div>
   );
 }

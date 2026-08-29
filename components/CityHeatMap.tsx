@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import { DeckGL } from "@deck.gl/react";
 import { OrbitView, COORDINATE_SYSTEM, type OrbitViewState } from "@deck.gl/core";
 import { ColumnLayer, PathLayer, TextLayer } from "@deck.gl/layers";
-import { PORTFOLIO, type Aoi } from "@/lib/aoi";
 import type { Assessment } from "@/lib/agent";
 import type { HeatGrid } from "@/lib/fortyguard";
 import { heatColor, RISK_COLOR } from "@/lib/format";
@@ -27,7 +26,7 @@ type Props = {
 };
 
 type GridDatum = { x: number; y: number; temp: number };
-type AoiDatum = { aoi: Aoi; assessment?: Assessment };
+type AoiDatum = { assessment: Assessment };
 
 export default function CityHeatMap({ cityGrid, assessments, selectedId, onSelect }: Props) {
   const [viewState, setViewState] = useState<OrbitViewState>(INITIAL_VIEW);
@@ -53,11 +52,7 @@ export default function CityHeatMap({ cityGrid, assessments, selectedId, onSelec
   ];
 
   const aoiData: AoiDatum[] = useMemo(
-    () =>
-      PORTFOLIO.map((aoi) => ({
-        aoi,
-        assessment: assessments.find((a) => a.aoiId === aoi.id),
-      })),
+    () => assessments.map((assessment) => ({ assessment })),
     [assessments],
   );
 
@@ -118,25 +113,23 @@ export default function CityHeatMap({ cityGrid, assessments, selectedId, onSelec
       pickable: true,
       coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
       getPosition: (d) => {
-        const [wx, wy] = toWorld(d.aoi.gx, d.aoi.gy);
+        const [wx, wy] = toWorld(d.assessment.gx, d.assessment.gy);
         return [wx, wy];
       },
       getElevation: (d) => {
-        const score = d.assessment?.riskScore ?? 20;
-        const base = 20 + score * 0.42;
-        return d.aoi.id === selectedId ? base + 12 : base;
+        const base = 20 + d.assessment.riskScore * 0.42;
+        return d.assessment.aoiId === selectedId ? base + 12 : base;
       },
       getFillColor: (d) => {
-        if (!d.assessment) return [100, 116, 139, 230];
         const [r, g, b] = RISK_COLOR[d.assessment.riskLabel].rgb;
-        return [r, g, b, d.aoi.id === selectedId ? 255 : 225];
+        return [r, g, b, d.assessment.aoiId === selectedId ? 255 : 225];
       },
       getLineColor: [255, 255, 255, 120],
       stroked: true,
       lineWidthMinPixels: 1,
       onClick: (info) => {
         const datum = info.object as AoiDatum | undefined;
-        if (datum) onSelect(datum.aoi.id);
+        if (datum) onSelect(datum.assessment.aoiId);
       },
       updateTriggers: {
         getElevation: [selectedId, assessments],
@@ -149,13 +142,12 @@ export default function CityHeatMap({ cityGrid, assessments, selectedId, onSelec
       data: aoiData,
       coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
       getPosition: (d) => {
-        const [wx, wy] = toWorld(d.aoi.gx, d.aoi.gy);
-        const score = d.assessment?.riskScore ?? 20;
-        return [wx, wy, 24 + score * 0.42 + (d.aoi.id === selectedId ? 16 : 7)];
+        const [wx, wy] = toWorld(d.assessment.gx, d.assessment.gy);
+        return [wx, wy, 24 + d.assessment.riskScore * 0.42 + (d.assessment.aoiId === selectedId ? 16 : 7)];
       },
-      getText: (d) => d.aoi.name.replace(/ (Commercial|Infrastructure|Elder Care|Transit) /, " "),
+      getText: (d) => d.assessment.aoiName.replace(/\b(Commercial |Infrastructure |Elder Care |Transit |Office )\b/g, ""),
       getSize: 12,
-      getColor: (d) => (d.aoi.id === selectedId ? [255, 255, 255, 255] : [203, 213, 225, 200]),
+      getColor: (d) => (d.assessment.aoiId === selectedId ? [255, 255, 255, 255] : [203, 213, 225, 200]),
       getAngle: 0,
       billboard: true,
       fontWeight: 600,

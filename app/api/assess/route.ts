@@ -1,17 +1,37 @@
 import { NextResponse } from "next/server";
-import { PORTFOLIO, GRID_SIZE, getAoi } from "@/lib/aoi";
-import { getSignalBundle, type HeatGrid } from "@/lib/fortyguard";
+import {
+  CITIES,
+  DEFAULT_CITY_ID,
+  GRID_SIZE,
+  getCity,
+  getPortfolio,
+  type City,
+} from "@/lib/aoi";
+import { getSignalBundle, type HeatGrid, type SignalContext } from "@/lib/fortyguard";
 import { assessAoi, type Assessment } from "@/lib/agent";
 
 export const maxDuration = 60;
 
+export type CitySummary = Pick<City, "id" | "name" | "country" | "timezone" | "note">;
+
 export type AssessResponse = {
   generatedAt: string;
+  city: CitySummary;
+  cities: CitySummary[];
   dataSource: "live" | "mock" | "mixed";
   agentSource: "claude" | "rules" | "mixed";
   cityGrid: HeatGrid;
+  context: SignalContext;
   assessments: Assessment[];
 };
+
+const toSummary = (c: City): CitySummary => ({
+  id: c.id,
+  name: c.name,
+  country: c.country,
+  timezone: c.timezone,
+  note: c.note,
+});
 
 function collapse<T extends string>(values: T[]): T | "mixed" {
   const uniq = Array.from(new Set(values));
@@ -27,13 +47,15 @@ function composeCityGrid(grids: HeatGrid[]): HeatGrid {
   return { size: GRID_SIZE, cells: cells.map((c) => Math.round(c * 10) / 10) };
 }
 
-async function runPortfolio(ids: string[]): Promise<AssessResponse> {
-  const aois = ids.map(getAoi).filter((a): a is NonNullable<typeof a> => Boolean(a));
+async function runCity(cityId: string): Promise<AssessResponse | null> {
+  const city = getCity(cityId);
+  if (!city) return null;
+  const aois = getPortfolio(city.id);
 
   const results = await Promise.all(
     aois.map(async (aoi) => {
-      const bundle = await getSignalBundle(aoi);
-      const assessment = await assessAoi(aoi, bundle);
+      const bundle = await getSignalBundle(aoi, city);
+      const assessment = await assessAoi(aoi, bundle, city);
       return { bundle, assessment };
     }),
   );
@@ -44,26 +66,34 @@ async function runPortfolio(ids: string[]): Promise<AssessResponse> {
 
   return {
     generatedAt: new Date().toISOString(),
+    city: toSummary(city),
+    cities: CITIES.map(toSummary),
     dataSource: collapse(results.map((r) => r.bundle.source)),
     agentSource: collapse(assessments.map((a) => a.agentSource)),
     cityGrid: composeCityGrid(results.map((r) => r.bundle.grid)),
+    context: results[0]?.bundle.context ?? { elevationM: null, clearSkyGhi: 0, clearSkyDni: 0, clearSkyDhi: 0 },
     assessments,
   };
 }
 
-export async function GET() {
-  return NextResponse.json(await runPortfolio(PORTFOLIO.map((a) => a.id)));
+export async function GET(request: Request) {
+  const cityId = new URL(request.url).searchParams.get("city") ?? DEFAULT_CITY_ID;
+  const res = await runCity(cityId);
+  return res
+    ? NextResponse.json(res)
+    : NextResponse.json({ error: `Unknown city: ${cityId}` }, { status: 400 });
 }
 
 export async function POST(request: Request) {
-  let ids: string[] = PORTFOLIO.map((a) => a.id);
+  let cityId = DEFAULT_CITY_ID;
   try {
     const body = await request.json();
-    if (Array.isArray(body?.aoiIds) && body.aoiIds.length > 0) {
-      ids = body.aoiIds.filter((x: unknown): x is string => typeof x === "string");
-    }
+    if (typeof body?.cityId === "string") cityId = body.cityId;
   } catch {
-    // no body — assess the whole portfolio
+    // no body — assess the default city
   }
-  return NextResponse.json(await runPortfolio(ids));
+  const res = await runCity(cityId);
+  return res
+    ? NextResponse.json(res)
+    : NextResponse.json({ error: `Unknown city: ${cityId}` }, { status: 400 });
 }

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { AOI_TYPE_LABEL, type Aoi, type AoiType } from "./aoi";
+import { AOI_TYPE_LABEL, type Aoi, type AoiType, type City } from "./aoi";
 import { computeHeatRisk } from "./heatEngine";
 import { coolestCorridor } from "./route";
 import type { HourlySignal, SignalBundle } from "./fortyguard";
@@ -19,6 +19,10 @@ export type Assessment = {
   aoiName: string;
   aoiType: AoiType;
   aoiTypeLabel: string;
+  /** Grid cell for the 3D map. */
+  gx: number;
+  gy: number;
+  exposureNote: string;
   agentSource: "claude" | "rules";
   dataSource: "live" | "mock";
   riskScore: number;
@@ -96,6 +100,9 @@ function assessByRules(aoi: Aoi, bundle: SignalBundle): Assessment {
     aoiName: aoi.name,
     aoiType: aoi.type,
     aoiTypeLabel: AOI_TYPE_LABEL[aoi.type],
+    gx: aoi.gx,
+    gy: aoi.gy,
+    exposureNote: aoi.exposureNote,
     agentSource: "rules" as const,
     dataSource: bundle.source,
     hourly,
@@ -105,6 +112,9 @@ function assessByRules(aoi: Aoi, bundle: SignalBundle): Assessment {
   const peakWB = Math.max(...hourly.map((h) => h.wetBulbF));
   const peakAQIall = Math.max(...hourly.map((h) => h.aqi));
   const nightMinAll = Math.min(...hourly.filter((h) => h.hour >= 22 || h.hour <= 5).map((h) => h.tempF));
+
+  const peakGHI = Math.max(...hourly.map((h) => h.solarGhi));
+  const peakPM25 = Math.max(...hourly.map((h) => h.pm25));
 
   // Normalised 0–1 risk components, each against a documented band.
   const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -130,7 +140,7 @@ function assessByRules(aoi: Aoi, bundle: SignalBundle): Assessment {
       citedSignal: `heat index peaks at ${peakHI.toFixed(0)}°F (${fmtHour(peakHour)})`,
       rationale: `The heat-index curve peaks at ${peakHI.toFixed(0)}°F around ${fmtHour(
         peakHour,
-      )}, which the degree-hour model turns into a cooling load of ~${risk.peakLoadKw} kW against a ${aoi.building.baselineKw} kW baseline. Pre-cooling from ${fmtHour(
+      )}, with solar irradiance up to ${peakGHI} W/m² loading the facade, which the degree-hour model turns into a cooling load of ~${risk.peakLoadKw} kW against a ${aoi.building.baselineKw} kW baseline. Pre-cooling from ${fmtHour(
         risk.recommendation.startHour,
       )} pulls the slab and air mass down before the peak, flattening it.`,
       recommendation: {
@@ -207,10 +217,10 @@ function assessByRules(aoi: Aoi, bundle: SignalBundle): Assessment {
       peakHour,
       peakWindow: window,
       headline: `Apparent temp peaks ${Math.max(...hourly.map((h) => h.apparentF)).toFixed(0)}°F; overnight low only ${nightMin.toFixed(0)}°F`,
-      citedSignal: `overnight temperature stays at ${nightMin.toFixed(0)}°F; AQI peaks ${peakAQI}`,
+      citedSignal: `overnight temperature stays at ${nightMin.toFixed(0)}°F; PM2.5 sub-index peaks ${peakPM25} (AQI ${peakAQI})`,
       rationale: `The apparent temperature peaks in the afternoon, but the bigger risk for ${aoi.careHome.vulnerableResidents} vulnerable residents is that the overnight low only falls to ${nightMin.toFixed(
         0,
-      )}°F — bodies don't get the recovery window. AQI also peaks at ${peakAQI}. Both point to moving residents to conditioned space and issuing an advisory before the afternoon.`,
+      )}°F — bodies don't get the recovery window. Air quality compounds it: the PM2.5 sub-index peaks at ${peakPM25} (AQI ${peakAQI}). Both point to moving residents to conditioned, filtered space and issuing an advisory before the afternoon.`,
       recommendation: {
         kind: "resident_alert",
         label: "Issue resident advisory + cooling plan",
@@ -342,7 +352,12 @@ const ENRICH_TOOL: Anthropic.Tool = {
   },
 };
 
-async function enrichWithClaude(aoi: Aoi, bundle: SignalBundle, rule: Assessment): Promise<Assessment> {
+async function enrichWithClaude(
+  aoi: Aoi,
+  bundle: SignalBundle,
+  rule: Assessment,
+  city: City,
+): Promise<Assessment> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return rule;
 
@@ -351,7 +366,7 @@ async function enrichWithClaude(aoi: Aoi, bundle: SignalBundle, rule: Assessment
     .filter((h) => h.hour % 2 === 0)
     .map(
       (h) =>
-        `${fmtHour(h.hour)}  air ${h.tempF}°F  HI ${h.heatIndexF}°F  wet-bulb ${h.wetBulbF}°F  apparent ${h.apparentF}°F  RH ${h.relativeHumidityPct}%  AQI ${h.aqi}`,
+        `${fmtHour(h.hour)}  air ${h.tempF}°F  HI ${h.heatIndexF}°F  wet-bulb ${h.wetBulbF}°F  apparent ${h.apparentF}°F  RH ${h.relativeHumidityPct}%  AQI ${h.aqi}  PM2.5 ${h.pm25}  GHI ${h.solarGhi} W/m²  cloud ${h.cloudCoverOctas}/8`,
     )
     .join("\n");
 
@@ -364,7 +379,7 @@ async function enrichWithClaude(aoi: Aoi, bundle: SignalBundle, rule: Assessment
       messages: [
         {
           role: "user",
-          content: `You are Heat Sentinel, an autonomous agent managing heat risk for a portfolio of city assets in Abu Dhabi.
+          content: `You are Heat Sentinel, an autonomous agent managing heat risk for a portfolio of city assets in ${city.name}, ${city.country}.
 
 ASSET
   Name: ${aoi.name}
@@ -373,6 +388,7 @@ ASSET
 
 24H HYPERLOCAL SIGNAL (FortyGuard Temperature API, ${bundle.source} data), every 2h:
 ${digest}
+  peak clear-sky solar irradiance today: ${bundle.context.clearSkyGhi} W/m² (GHI)
 
 RULE-BASED DRAFT (your job is to sharpen this, not replace the plan)
   risk score: ${rule.riskScore}
@@ -429,7 +445,7 @@ function clampDelta(value: number, anchor: number, maxDelta: number): number {
 
 // --- Public entry point -------------------------------------------------
 
-export async function assessAoi(aoi: Aoi, bundle: SignalBundle): Promise<Assessment> {
+export async function assessAoi(aoi: Aoi, bundle: SignalBundle, city: City): Promise<Assessment> {
   const rule = assessByRules(aoi, bundle);
-  return enrichWithClaude(aoi, bundle, rule);
+  return enrichWithClaude(aoi, bundle, rule, city);
 }
