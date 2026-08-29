@@ -74,6 +74,18 @@ locations[0]: { lat, lon, elevation, temperature,
 
 Missing values → JSON `null` (legacy stored responses may use `-999`). `null` ≠ 0.
 
+### Verified against the live API (2026-08-29)
+
+- Works for every location tried, including Abu Dhabi; completes in ~5–10 s.
+- Real payload matches the schema above:
+  `result.locations[0].parameters.<name>` are 24-long arrays,
+  `result.metadata.timestamps` are ISO strings carrying the city's UTC offset
+  (e.g. `2026-08-29T14:00:00+04:00`) — parse the local hour from the string.
+- **There is no raw air-temperature array**, and `heat_index_celsius` runs away
+  under hot + humid conditions (values like 74–80 °C at night). Heat Sentinel
+  derives dry-bulb from `apparent_temperature_celsius` and recomputes the heat
+  index itself with the NWS 137 °F cap.
+
 ---
 
 ## `POST /v1/heatmap` — Heatmap Generation
@@ -100,9 +112,24 @@ Missing values → JSON `null` (legacy stored responses may use `-999`). `null` 
 - `granularity`: `60` | `80` | `100` (metres). Area caps: 10 mi² (Basic) / 50 mi² (Premium).
 
 **Result:** `result.map_data` (GeoJSON FeatureCollection of tile polygons with
-temperature) + `result.stats_data` (`Temperature_stats` min/max/mean/std,
-`Overall_temperature_distribution`, `Normal_temperature_distribution` {x_axis,
-y_axis}, `Temperature_frequency` histogram).
+temperature) + `result.stats_data` (`temperature_stats` min/max/mean/std,
+`overall_temperature_distribution`, `normal_temperature_distribution` {x_axis,
+y_axis}, `temperature_frequency` histogram).
+
+### Verified against the live API (2026-08-29)
+
+- Takes ~40 s to complete. Each tile:
+  `{ properties: { tile_id, average_temperature, min_temperature, max_temperature }, geometry: Polygon }`
+  — temperatures in °C.
+- **Gridded coverage is currently US-only.** A ~3 km polygon returned:
+  Phoenix 1209 tiles, New York 150 tiles; Abu Dhabi / Dubai / Singapore returned
+  an empty `map_data.features: []` and `stats_data: { activity_id, n_cells: 0 }`.
+- Spatial spread at 100 m granularity for a single hour is small (≈ 0.2 °C across
+  3 km in Phoenix at 14:00) — useful for absolute level, less so for
+  within-neighbourhood routing at that timestamp.
+- Heat Sentinel therefore drives its per-city assessment from `env_params`
+  (global coverage) and keeps a modeled local grid for the 3D view and the
+  corridor route search.
 
 ---
 
@@ -154,10 +181,10 @@ segmented_image, image_date } (+ `result.back` when `back_view: true`).
 
 ## How Heat Sentinel uses it
 
-| Heat Sentinel need | FortyGuard call |
-|---|---|
-| Per-AOI 24 h heat-index / wet-bulb / apparent / humidity / AQI curve | `POST /v1/env_params`, `filter_type: 3` |
-| City heat grid for the 3D map + corridor route search | `POST /v1/heatmap`, `filter_type: 2`, `granularity: 100` |
-| Deep context report for a flagged AOI (stretch) | `POST /v1/heat_intelligence`, `analysis: ["environmental","urban","anthropogenic"]` |
+| Heat Sentinel need | FortyGuard call | Status |
+|---|---|---|
+| Per-AOI 24 h curve: heat index, wet-bulb, apparent temp, humidity, AQI, PM2.5, cloud, CO₂, solar irradiance | `POST /v1/env_params`, `filter_type: 3` | **in use** — global coverage |
+| Real gridded heat map (would replace the modeled local grid) | `POST /v1/heatmap`, `granularity: 100` | validated; gridded coverage US-only for now, so not on the live path |
+| Deep context report for a flagged AOI | `POST /v1/heat_intelligence`, `analysis: ["environmental","urban","anthropogenic"]` | future — returns a PDF, not structured data |
 
 All values come back in °C / indices — Heat Sentinel converts to °F internally.
