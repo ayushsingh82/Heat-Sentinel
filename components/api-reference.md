@@ -175,7 +175,11 @@ segmented_image, image_date } (+ `result.back` when `back_view: true`).
 
 - `GET /v1/status/{activity_id}` — unified status / result retrieval.
 - `POST /v1/system/fetch-api-key-usage` — usage for the current billing cycle.
-- `POST /v1/system/fetch-api-key-custom-usage` — usage for a custom date range.
+  **Body must include `{ "api_key": "…" }`** (the header alone gives a 422);
+  returns `plan_details`, `credit_summary`, and an `activity_breakdown` array of
+  `{ name, credits, count, percentage }` per activity type.
+- `POST /v1/system/fetch-api-key-custom-usage` — custom date range
+  (`{ api_key, start_date, end_date }`).
 
 ---
 
