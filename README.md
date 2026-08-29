@@ -100,7 +100,8 @@ Open [http://localhost:3000](http://localhost:3000). Copy `.env.example` to
 FortyGuard Temperature API® · Next.js / React / TypeScript · Claude (agent
 reasoning) · deck.gl (3D heat map) · Recharts (timelines).
 
-## Hackathon docs
+## API reference
 
-Idea write-up, tracks, API release notes, timeline, submission process, and rules
-are in [`hackathon/`](./hackathon).
+The extracted FortyGuard Temperature API contract and release notes are in
+[`components/api-reference.md`](./components/api-reference.md) and
+[`components/api-release-notes.md`](./components/api-release-notes.md).
